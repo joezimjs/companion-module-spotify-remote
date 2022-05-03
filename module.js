@@ -3,7 +3,7 @@
 // Seek on transfer to fix skipping due to spotifty api being bad.
 // Separate polling of data from variable state update to allow smoother status updates
 
-var instance_skel = require('../../instance_skel')
+// var instance_skel = require('../../instance_skel')
 var SpotifyWebApi = require('spotify-web-api-node')
 
 const scopes = [
@@ -16,16 +16,16 @@ const scopes = [
 	'playlist-read-private',
 	'user-library-read',
 	'user-top-read',
-	'user-read-playback-position',
+	'user-read-playback-position'
 ]
 
 function instance(system, id, config) {
 	var self = this
 	self.spotifyApi = null
 	// super-constructor
-	instance_skel.apply(this, arguments)
+	// instance_skel.apply(this, arguments)
 
-	self.actions() // export actions
+	// self.actions() // export actions
 
 	return self
 }
@@ -44,8 +44,20 @@ instance.prototype.errorCheck = function (err) {
 				return false
 			}
 		)
+	}
+	//Error Code 429 represents rate limit exceeded
+	else if (err.statusCode == '429') {
+		//Retry after the specified amount of time.
+		var timeout = (+err.headers['retry-after'] + 1) * 1000 // add one second to the amount of time because Spotify floors their time
+
+		return new Promise(function (resolve) {
+			console.log('wait', timeout)
+			setTimeout(function () {
+				resolve(true)
+			}, timeout)
+		})
 	} else {
-		console.log('Something went wrong with an API Call: ' + err)
+		console.log('Something went wrong with an API Call: ' + err.name + ': ' + err.statusCode)
 		return Promise.resolve(false)
 	}
 }
@@ -70,7 +82,7 @@ instance.prototype.ChangePlayState = function (action, device) {
 				if (action.action == 'play' || action.action == 'play/pause') {
 					self.spotifyApi
 						.play({
-							device_id: device,
+							device_id: device
 						})
 						.then(
 							function () {
@@ -97,7 +109,7 @@ instance.prototype.PlaySpecific = function (action, device) {
 	var self = this
 
 	let params = {
-		device_id: device,
+		device_id: device
 	}
 
 	if (action.action == 'playSpecificList') {
@@ -113,18 +125,14 @@ instance.prototype.PlaySpecific = function (action, device) {
 	self.spotifyApi.getMyCurrentPlaybackState().then(
 		function (data) {
 			if (data.body && data.body.context && data.body.context.uri === params.context_uri) {
-				if (
-					!action.options.behavior ||
-					action.options.behavior == 'return' ||
-					(action.options.behavior == 'resume' && data.body.is_playing)
-				) {
+				if (!action.options.behavior || action.options.behavior == 'return' || (action.options.behavior == 'resume' && data.body.is_playing)) {
 					return this.log('warning', `Already playing that ${action.options.type}: ${action.options.context_uri}`)
 				}
 
 				if (action.options.behavior == 'resume') {
 					return self.spotifyApi
 						.play({
-							device_id: device,
+							device_id: device
 						})
 						.then(
 							function (res) {
@@ -293,7 +301,7 @@ instance.prototype.ChangeVolume = function (action, device, specific = false) {
 
 			self.spotifyApi
 				.setVolume(currentVolume, {
-					device_id: device,
+					device_id: device
 				})
 				.then(
 					function () {},
@@ -345,7 +353,7 @@ instance.prototype.TransferPlayback = function (id) {
 	id = [id]
 	self.spotifyApi
 		.transferMyPlayback(id, {
-			play: true,
+			play: true
 		})
 		.then(
 			function () {
@@ -363,15 +371,17 @@ instance.prototype.TransferPlayback = function (id) {
 
 instance.prototype.PollPlaybackState = function () {
 	var self = this
-	self.spotifyApi.getMyCurrentPlaybackState().then(
+	return self.spotifyApi.getMyCurrentPlaybackState().then(
 		function (data) {
 			if (data.body) {
 				if (data.body.is_playing) {
+					console.log('playing ', data.body.progress_ms, 'of', data.body.item.duration_ms)
 					self.MusicPlaying = true
 					self.MusicPlayingIcon = '\u23F5'
 					self.checkFeedbacks('is-playing')
 				}
 				if (!data.body.is_playing) {
+					console.log('paused')
 					self.MusicPlaying = false
 					self.MusicPlayingIcon = '\u23F9'
 					self.checkFeedbacks('is-playing')
@@ -464,9 +474,9 @@ instance.prototype.PollPlaybackState = function () {
 			self.setVariable('deviceName', self.ActiveDevice)
 		},
 		function (err) {
-			self.errorCheck(err).then(function (retry) {
+			return self.errorCheck(err).then(function (retry) {
 				if (retry) {
-					self.PollPlaybackState()
+					return self.PollPlaybackState()
 				}
 			})
 		}
@@ -496,13 +506,7 @@ instance.prototype.updateConfig = function (config) {
 			}
 		)
 	}
-	if (
-		self.config.redirectUri &&
-		self.config.clientSecret &&
-		self.config.clientId &&
-		!self.config.accessToken &&
-		!self.config.code
-	) {
+	if (self.config.redirectUri && self.config.clientSecret && self.config.clientId && !self.config.accessToken && !self.config.code) {
 		self.config.authURL = self.spotifyApi.createAuthorizeURL(scopes)
 		self.saveConfig()
 	}
@@ -549,9 +553,10 @@ instance.prototype.init = function () {
 		}
 	)
 
-	if (self.Timer === undefined) {
-		self.Timer = setInterval(self.DoPoll.bind(self), 250) //Check every 0.25 seconds
-	}
+	self.DoPoll()
+	// if (self.Timer === undefined) {
+	// 	self.Timer = setInterval(self.DoPoll.bind(self), 25) //Check every 0.25 seconds
+	// }
 
 	self.initFeedbacks()
 	self.initVariables()
@@ -563,17 +568,21 @@ instance.prototype.DoPoll = function () {
 	var self = this
 
 	// If everything is populated we can do the poll
-	if (
-		self.spotifyApi.getClientId() &&
-		self.spotifyApi.getAccessToken() &&
-		self.spotifyApi.getClientSecret() &&
-		self.spotifyApi.getRefreshToken()
-	) {
+	if (self.spotifyApi.getClientId() && self.spotifyApi.getAccessToken() && self.spotifyApi.getClientSecret() && self.spotifyApi.getRefreshToken()) {
 		self.status(self.STATUS_OK)
 
-		self.PollPlaybackState()
+		self.PollPlaybackState().then(
+			function () {
+				setTimeout(self.DoPoll.bind(self), 3000)
+			},
+			function () {
+				setTimeout(self.DoPoll.bind(self), 3000)
+			}
+		)
 	} else {
 		self.status(self.STATUS_ERROR, 'Missing required config fields')
+
+		setTimeout(self.DoPoll.bind(self), 10000) // if not configured, wait 10 seconds to check again to see if we're configured
 	}
 }
 
@@ -600,56 +609,56 @@ instance.prototype.config_fields = function () {
 			id: 'info',
 			width: 12,
 			label: 'Setup Information',
-			value: '<strong>PLEASE READ THE HELP FILE.</strong> (Question mark in the top right)',
+			value: '<strong>PLEASE READ THE HELP FILE.</strong> (Question mark in the top right)'
 		},
 		{
 			type: 'textinput',
 			id: 'clientId',
 			width: 12,
-			label: 'Client ID',
+			label: 'Client ID'
 		},
 		{
 			type: 'textinput',
 			id: 'clientSecret',
 			width: 12,
-			label: 'Client Secret',
+			label: 'Client Secret'
 		},
 		{
 			type: 'textinput',
 			id: 'redirectUri',
 			width: 12,
-			label: 'Redirect URL',
+			label: 'Redirect URL'
 		},
 		{
 			type: 'textinput',
 			id: 'code',
 			width: 12,
-			label: 'Approval Code',
+			label: 'Approval Code'
 		},
 		{
 			type: 'textinput',
 			id: 'accessToken',
 			width: 12,
-			label: 'Access Token',
+			label: 'Access Token'
 		},
 		{
 			type: 'textinput',
 			id: 'refreshToken',
 			width: 12,
-			label: 'Refresh Token',
+			label: 'Refresh Token'
 		},
 		{
 			type: 'textinput',
 			id: 'deviceId',
 			width: 12,
-			label: 'Device ID',
+			label: 'Device ID'
 		},
 		{
 			type: 'textinput',
 			id: 'authURL',
 			width: 12,
-			label: 'Auth URL',
-		},
+			label: 'Auth URL'
+		}
 	]
 }
 
@@ -658,10 +667,10 @@ instance.prototype.actions = function (system) {
 
 	self.setActions({
 		'play/pause': {
-			label: 'Toggle Play/Pause',
+			label: 'Toggle Play/Pause'
 		},
 		play: {
-			label: 'Play',
+			label: 'Play'
 		},
 		playSpecificList: {
 			label: 'Start Specific Album / Artist / Playlist',
@@ -673,15 +682,15 @@ instance.prototype.actions = function (system) {
 					choices: [
 						{ id: 'album', label: 'Album' },
 						{ id: 'artist', label: 'Artist' },
-						{ id: 'playlist', label: 'Playlist' },
-					],
+						{ id: 'playlist', label: 'Playlist' }
+					]
 				},
 				{
 					tooltip: 'Provide the ID for the item',
 					required: true,
 					type: 'textinput',
 					label: 'Item ID',
-					id: 'context_uri',
+					id: 'context_uri'
 				},
 				{
 					type: 'dropdown',
@@ -691,10 +700,10 @@ instance.prototype.actions = function (system) {
 					choices: [
 						{ id: 'return', label: 'Do Nothing' },
 						{ id: 'resume', label: 'Play (if paused)' },
-						{ id: 'force', label: 'Force Play (from start)' },
-					],
-				},
-			],
+						{ id: 'force', label: 'Force Play (from start)' }
+					]
+				}
+			]
 		},
 		playSpecificTracks: {
 			label: 'Start Specific Track(s)',
@@ -704,12 +713,12 @@ instance.prototype.actions = function (system) {
 					id: 'tracks',
 					type: 'textinput',
 					required: true,
-					label: 'Input Specific Track IDs',
-				},
-			],
+					label: 'Input Specific Track IDs'
+				}
+			]
 		},
 		pause: {
-			label: 'Pause Playback',
+			label: 'Pause Playback'
 		},
 		volumeUp: {
 			label: 'Volume Up',
@@ -718,9 +727,9 @@ instance.prototype.actions = function (system) {
 					type: 'textinput',
 					label: 'Volume',
 					id: 'volumeUpAmount',
-					default: '5',
-				},
-			],
+					default: '5'
+				}
+			]
 		},
 		volumeDown: {
 			label: 'Volume Down',
@@ -729,9 +738,9 @@ instance.prototype.actions = function (system) {
 					type: 'textinput',
 					label: 'Volume',
 					id: 'volumeDownAmount',
-					default: '5',
-				},
-			],
+					default: '5'
+				}
+			]
 		},
 		volumeSpecific: {
 			label: 'Set Volume to Specific Value',
@@ -740,9 +749,9 @@ instance.prototype.actions = function (system) {
 					type: 'textinput',
 					label: 'Volume',
 					id: 'value',
-					default: '50',
-				},
-			],
+					default: '50'
+				}
+			]
 		},
 		seekPosition: {
 			label: 'Seek To Position In Currently Playing Track',
@@ -751,24 +760,24 @@ instance.prototype.actions = function (system) {
 					type: 'textinput',
 					label: 'Position (milliseconds)',
 					id: 'position',
-					default: '',
-				},
-			],
+					default: ''
+				}
+			]
 		},
 		skip: {
-			label: 'Skip Track',
+			label: 'Skip Track'
 		},
 		previous: {
-			label: 'Previous Track',
+			label: 'Previous Track'
 		},
 		shuffleToggle: {
-			label: 'Toggle Shuffle',
+			label: 'Toggle Shuffle'
 		},
 		shuffleOn: {
-			label: 'Turn Shuffle On',
+			label: 'Turn Shuffle On'
 		},
 		shuffleOff: {
-			label: 'Turn Shuffle Off',
+			label: 'Turn Shuffle Off'
 		},
 		repeatState: {
 			label: 'Set Repeat State',
@@ -781,22 +790,22 @@ instance.prototype.actions = function (system) {
 					choices: [
 						{
 							id: 'off',
-							label: 'off',
+							label: 'off'
 						},
 						{
 							id: 'context',
-							label: 'context',
+							label: 'context'
 						},
 						{
 							id: 'track',
-							label: 'track',
-						},
-					],
-				},
-			],
+							label: 'track'
+						}
+					]
+				}
+			]
 		},
 		activeDeviceToConfig: {
-			label: 'Write the ID of the current Active Device to config',
+			label: 'Write the ID of the current Active Device to config'
 		},
 		switchActiveDevice: {
 			label: 'Change Active Device',
@@ -805,10 +814,10 @@ instance.prototype.actions = function (system) {
 					type: 'textinput',
 					label: 'Device ID',
 					id: 'deviceId',
-					default: '',
-				},
-			],
-		},
+					default: ''
+				}
+			]
+		}
 	})
 }
 
@@ -829,15 +838,15 @@ instance.prototype.initFeedbacks = function () {
 				type: 'colorpicker',
 				label: 'Foreground color',
 				id: 'fg',
-				default: self.rgb(255, 255, 255),
+				default: self.rgb(255, 255, 255)
 			},
 			{
 				type: 'colorpicker',
 				label: 'Background color',
 				id: 'bg',
-				default: self.rgb(0, 255, 0),
-			},
-		],
+				default: self.rgb(0, 255, 0)
+			}
+		]
 	}
 
 	feedbacks['is-shuffle'] = {
@@ -848,15 +857,15 @@ instance.prototype.initFeedbacks = function () {
 				type: 'colorpicker',
 				label: 'Foreground color',
 				id: 'fg',
-				default: self.rgb(255, 255, 255),
+				default: self.rgb(255, 255, 255)
 			},
 			{
 				type: 'colorpicker',
 				label: 'Background color',
 				id: 'bg',
-				default: self.rgb(0, 255, 0),
-			},
-		],
+				default: self.rgb(0, 255, 0)
+			}
+		]
 	}
 
 	feedbacks['is-repeat'] = {
@@ -867,13 +876,13 @@ instance.prototype.initFeedbacks = function () {
 				type: 'colorpicker',
 				label: 'Foreground color',
 				id: 'fg',
-				default: self.rgb(255, 255, 255),
+				default: self.rgb(255, 255, 255)
 			},
 			{
 				type: 'colorpicker',
 				label: 'Background color',
 				id: 'bg',
-				default: self.rgb(0, 255, 0),
+				default: self.rgb(0, 255, 0)
 			},
 			{
 				type: 'dropdown',
@@ -883,19 +892,19 @@ instance.prototype.initFeedbacks = function () {
 				choices: [
 					{
 						label: 'off',
-						id: 'off',
+						id: 'off'
 					},
 					{
 						label: 'context',
-						id: 'context',
+						id: 'context'
 					},
 					{
 						label: 'track',
-						id: 'track',
-					},
-				],
-			},
-		],
+						id: 'track'
+					}
+				]
+			}
+		]
 	}
 
 	feedbacks['active-device'] = {
@@ -906,20 +915,20 @@ instance.prototype.initFeedbacks = function () {
 				type: 'colorpicker',
 				label: 'Foreground color',
 				id: 'fg',
-				default: self.rgb(255, 255, 255),
+				default: self.rgb(255, 255, 255)
 			},
 			{
 				type: 'colorpicker',
 				label: 'Background color',
 				id: 'bg',
-				default: self.rgb(0, 255, 0),
+				default: self.rgb(0, 255, 0)
 			},
 			{
 				type: 'textinput',
 				label: 'Device Name (case insensitive)',
-				id: 'device',
-			},
-		],
+				id: 'device'
+			}
+		]
 	}
 
 	feedbacks['current-context'] = {
@@ -930,20 +939,20 @@ instance.prototype.initFeedbacks = function () {
 				type: 'colorpicker',
 				label: 'Foreground color',
 				id: 'fg',
-				default: self.rgb(255, 255, 255),
+				default: self.rgb(255, 255, 255)
 			},
 			{
 				type: 'colorpicker',
 				label: 'Background color',
 				id: 'bg',
-				default: self.rgb(0, 255, 0),
+				default: self.rgb(0, 255, 0)
 			},
 			{
 				type: 'textinput',
 				label: 'Item ID',
-				id: 'id',
-			},
-		],
+				id: 'id'
+			}
+		]
 	}
 
 	self.setFeedbackDefinitions(feedbacks)
@@ -956,75 +965,75 @@ instance.prototype.initVariables = function () {
 
 	variables.push({
 		name: 'songName',
-		label: 'Current Song Name',
+		label: 'Current Song Name'
 	})
 	variables.push({
 		name: 'albumName',
-		label: 'Current Album Name',
+		label: 'Current Album Name'
 	})
 	variables.push({
 		name: 'artistName',
-		label: 'Current Artist Name',
+		label: 'Current Artist Name'
 	})
 	variables.push({
 		name: 'isPlaying',
-		label: 'Is Playback Active',
+		label: 'Is Playback Active'
 	})
 	variables.push({
 		name: 'isPlayingIcon',
-		label: 'Playback Icon',
+		label: 'Playback Icon'
 	})
 	variables.push({
 		name: 'isShuffle',
-		label: 'Is Shuffle Enabled',
+		label: 'Is Shuffle Enabled'
 	})
 	variables.push({
 		name: 'repeat',
-		label: 'Is Repeat Enabled',
+		label: 'Is Repeat Enabled'
 	})
 	variables.push({
 		name: 'currentContext',
-		label: 'Current Context ID',
+		label: 'Current Context ID'
 	})
 	variables.push({
 		name: 'songPercentage',
-		label: 'Percentage of the current song completed',
+		label: 'Percentage of the current song completed'
 	})
 	variables.push({
 		name: 'songProgressSeconds',
-		label: 'Progress of the current song in seconds',
+		label: 'Progress of the current song in seconds'
 	})
 	variables.push({
 		name: 'songDurationSeconds',
-		label: 'Duration of the current song in seconds',
+		label: 'Duration of the current song in seconds'
 	})
 	variables.push({
 		name: 'songTimeRemaining',
-		label: 'Time remaining in song (pretty formatted HH:MM:SS)',
+		label: 'Time remaining in song (pretty formatted HH:MM:SS)'
 	})
 	variables.push({
 		name: 'songTimeRemainingHours',
-		label: 'Hours remaining in song (zero padded)',
+		label: 'Hours remaining in song (zero padded)'
 	})
 	variables.push({
 		name: 'songTimeRemainingMinutes',
-		label: 'Minutes remaining in song (zero padded)',
+		label: 'Minutes remaining in song (zero padded)'
 	})
 	variables.push({
 		name: 'songTimeRemainingSeconds',
-		label: 'Seconds remaining in song (zero padded)',
+		label: 'Seconds remaining in song (zero padded)'
 	})
 	variables.push({
 		name: 'volume',
-		label: 'Current Volume',
+		label: 'Current Volume'
 	})
 	variables.push({
 		name: 'currentAlbumArt',
-		label: 'Currently playing album artwork',
+		label: 'Currently playing album artwork'
 	})
 	variables.push({
 		name: 'deviceName',
-		label: 'Current device name',
+		label: 'Current device name'
 	})
 
 	self.setVariableDefinitions(variables)
@@ -1100,7 +1109,7 @@ instance.prototype.feedback = function (feedback, bank) {
 		if (self.MusicPlaying) {
 			return {
 				color: feedback.options.fg,
-				bgcolor: feedback.options.bg,
+				bgcolor: feedback.options.bg
 			}
 		}
 	}
@@ -1108,7 +1117,7 @@ instance.prototype.feedback = function (feedback, bank) {
 		if (self.ShuffleOn) {
 			return {
 				color: feedback.options.fg,
-				bgcolor: feedback.options.bg,
+				bgcolor: feedback.options.bg
 			}
 		}
 	}
@@ -1116,7 +1125,7 @@ instance.prototype.feedback = function (feedback, bank) {
 		if (self.RepeatState == feedback.options.type) {
 			return {
 				color: feedback.options.fg,
-				bgcolor: feedback.options.bg,
+				bgcolor: feedback.options.bg
 			}
 		}
 	}
@@ -1124,7 +1133,7 @@ instance.prototype.feedback = function (feedback, bank) {
 		if (self.ActiveDevice.toLowerCase() == feedback.options.device.toLowerCase()) {
 			return {
 				color: feedback.options.fg,
-				bgcolor: feedback.options.bg,
+				bgcolor: feedback.options.bg
 			}
 		}
 	}
@@ -1132,11 +1141,11 @@ instance.prototype.feedback = function (feedback, bank) {
 		if (self.CurrentContext == feedback.options.id) {
 			return {
 				color: feedback.options.fg,
-				bgcolor: feedback.options.bg,
+				bgcolor: feedback.options.bg
 			}
 		}
 	}
 }
 
-instance_skel.extendedBy(instance)
+// instance_skel.extendedBy(instance)
 exports = module.exports = instance
